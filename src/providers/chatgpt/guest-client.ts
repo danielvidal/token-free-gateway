@@ -97,6 +97,8 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 		const pollIntervalMs = this.config.pollIntervalMs ?? 750;
 		const stabilityThreshold = this.config.stabilityThreshold ?? 2;
 		const deadline = Date.now() + maxWaitMs;
+		const captureStartedAt = Date.now();
+		let diagnosticLogged = false;
 		let lastText = "";
 		let stableCount = 0;
 
@@ -141,6 +143,12 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 						lower === "read aloud" ||
 						lower === "good response" ||
 						lower === "bad response" ||
+						lower === "regenerate" ||
+						lower === "attach" ||
+						lower === "search" ||
+						lower === "voice" ||
+						lower === "send" ||
+						lower === "ask anything" ||
 						lower.startsWith("you’ll get smarter responses") ||
 						lower.startsWith("you'll get smarter responses") ||
 						lower.startsWith("chatgpt can make mistakes")
@@ -217,6 +225,34 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 					}
 				}
 
+				// Robust fallback for the Xvfb/guest layout: anchor on the last occurrence
+				// of the submitted prompt in body.innerText and consider only text after it.
+				// This avoids the earlier bug where a global promotional banner won the
+				// body-diff race.
+				const bodyLines = (document.body?.innerText ?? "")
+					.split("\n")
+					.map(clean)
+					.filter(Boolean);
+				let promptIndex = -1;
+				for (let i = bodyLines.length - 1; i >= 0; i--) {
+					const line = bodyLines[i]!;
+					if (line === promptText || line === humanPromptText || line.endsWith(promptText)) {
+						promptIndex = i;
+						break;
+					}
+				}
+				if (promptIndex >= 0) {
+					const suffix = bodyLines
+						.slice(promptIndex + 1)
+						.filter((line) => !isNoise(line))
+						.filter((line) => !/^(New chat|Temporary Chat|Upgrade|Settings)$/i.test(line))
+						.slice(0, 20);
+					const text = suffix.join(" ").trim();
+					if (text) {
+						return { text, isStreaming: !!stopButton, source: "body-after-prompt" };
+					}
+				}
+
 				return { text: "", isStreaming: !!stopButton, source: "none" };
 			}, params.message);
 
@@ -232,6 +268,28 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 				if (!result.isStreaming && stableCount >= stabilityThreshold) {
 					return cleanedText;
 				}
+			} else if (!diagnosticLogged && Date.now() - captureStartedAt >= 5_000) {
+				diagnosticLogged = true;
+				const diagnostic = await page
+					.evaluate((prompt) => {
+						const body = (document.body?.innerText ?? "")
+							.replace(/[\u200B-\u200D\uFEFF]/g, "")
+							.replace(/\s+/g, " ")
+							.trim();
+						return {
+							url: location.href,
+							title: document.title,
+							promptVisible: body.includes(prompt),
+							stopVisible: !!document.querySelector(
+								'button[data-testid="stop-button"], button[aria-label*="Stop" i], button[aria-label*="stop" i]',
+							),
+							tail: body.slice(-500),
+						};
+					}, params.message)
+					.catch(() => ({ url: page.url(), title: "", promptVisible: false, stopVisible: false, tail: "" }));
+				console.warn(
+					`[ChatGPT Guest] capture diagnostic after 5s; url=${diagnostic.url}; title=${JSON.stringify(diagnostic.title)}; promptVisible=${diagnostic.promptVisible}; stopVisible=${diagnostic.stopVisible}; tail=${JSON.stringify(diagnostic.tail)}`,
+				);
 			}
 		}
 
