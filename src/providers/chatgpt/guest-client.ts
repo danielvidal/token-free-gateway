@@ -46,12 +46,19 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 			'[contenteditable="true"]',
 		];
 
-		// A fresh headless tab is returned after DOMContentLoaded, but ChatGPT's
-		// client-side app can take a few more seconds to hydrate and render the
-		// guest prompt input. Poll instead of failing on the first DOM read.
 		let inputHandle = null;
 		const inputDeadline = Date.now() + 20_000;
 		while (!inputHandle && Date.now() < inputDeadline) {
+			const title = await page.title().catch(() => "");
+			if (/^Just a moment\.\.\.$/i.test(title.trim())) {
+				console.warn(
+					`[ChatGPT Guest] browser challenge detected; url=${page.url()}; title=${JSON.stringify(title)}`,
+				);
+				throw new Error(
+					"ChatGPT guest unavailable: browser challenge detected. Manual interaction may be required.",
+				);
+			}
+
 			for (const selector of inputSelectors) {
 				inputHandle = await page.$(selector);
 				if (inputHandle) break;
