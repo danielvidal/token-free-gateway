@@ -40,12 +40,32 @@ export class GeminiWebClient extends BaseDomClient<GeminiWebAuth> {
 			'div[role="textbox"]',
 			'[contenteditable="true"]',
 		];
+
 		let inputHandle = null;
-		for (const sel of inputSelectors) {
-			inputHandle = await page.$(sel);
-			if (inputHandle) break;
+		const inputDeadline = Date.now() + 20_000;
+		while (!inputHandle && Date.now() < inputDeadline) {
+			for (const sel of inputSelectors) {
+				inputHandle = await page.$(sel);
+				if (inputHandle) break;
+			}
+			if (!inputHandle) await page.waitForTimeout(500);
 		}
-		if (!inputHandle) throw new Error("Gemini: could not find chat input");
+
+		if (!inputHandle) {
+			const diagnostic = await page
+				.evaluate(() => ({
+					url: location.href,
+					title: document.title,
+					visibleText: (document.body?.innerText ?? "").replace(/\s+/g, " ").trim().slice(0, 700),
+				}))
+				.catch(() => ({ url: page.url(), title: "", visibleText: "" }));
+			console.warn(
+				`[Gemini Guest] input not found after 20s; url=${diagnostic.url} title=${JSON.stringify(diagnostic.title)} visibleText=${JSON.stringify(diagnostic.visibleText)}`,
+			);
+			throw new Error(
+				"Gemini: could not find chat input after waiting for the page to load. Guest access may be unavailable or the page may require interaction.",
+			);
+		}
 
 		await inputHandle.click();
 		await delay(300);
