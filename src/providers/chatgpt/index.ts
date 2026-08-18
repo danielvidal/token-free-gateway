@@ -2,6 +2,7 @@ import type { ProviderDefinition } from "../types.ts";
 import type { ChatGPTWebAuth } from "./auth.ts";
 import { loginChatGPTWeb } from "./auth.ts";
 import { ChatGPTWebClient } from "./client.ts";
+import { ChatGPTGuestClient } from "./guest-client.ts";
 
 export const definition: ProviderDefinition = {
 	id: "chatgpt-web",
@@ -13,6 +14,8 @@ export const definition: ProviderDefinition = {
 		{ id: "gpt-3.5-turbo", name: "GPT-3.5 Turbo" },
 	],
 	factory: (credentials) =>
-		new ChatGPTWebClient((credentials ?? { accessToken: "", cookie: "" }) as ChatGPTWebAuth),
+		credentials
+			? new ChatGPTWebClient(credentials as ChatGPTWebAuth)
+			: new ChatGPTGuestClient(),
 	loginFn: loginChatGPTWeb,
 };
