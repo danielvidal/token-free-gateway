@@ -87,6 +87,17 @@ sync_repo() {
   fi
 }
 
+cleanup_existing() {
+  log "stopping services and cleaning legacy processes"
+  if [[ -f "$SRC_DIR/scripts/stop-vpc.sh" ]]; then
+    TFG_PORT="$GATEWAY_PORT" TFG_CDP_PORT="$CDP_PORT" bash "$SRC_DIR/scripts/stop-vpc.sh" || true
+  else
+    $SUDO systemctl stop "$GATEWAY_SERVICE" "$CHROME_SERVICE" 2>/dev/null || true
+    pkill -TERM -f 'token-free-gateway' 2>/dev/null || true
+    pkill -TERM -f 'remote-debugging-port=9222' 2>/dev/null || true
+  fi
+}
+
 build_gateway() {
   log "installing JS dependencies and building standalone binary"
   run_as_app bash -lc "cd '$SRC_DIR' && export PATH=\"\$HOME/.bun/bin:\$PATH\" && bun install --frozen-lockfile && bun run typecheck && bun test && bun run build"
@@ -200,6 +211,7 @@ main() {
   apt_install
   install_bun
   sync_repo
+  cleanup_existing
   build_gateway
 
   local chrome_bin
@@ -213,7 +225,7 @@ main() {
   log "gateway: http://127.0.0.1:$GATEWAY_PORT/v1"
   log "logs: sudo journalctl -u $GATEWAY_SERVICE -f"
   log "chrome logs: sudo journalctl -u $CHROME_SERVICE -f"
-  log "stop everything: $SRC_DIR/scripts/stop-vpc.sh"
+  log "stop everything: bash $SRC_DIR/scripts/stop-vpc.sh"
 }
 
 main "$@"
