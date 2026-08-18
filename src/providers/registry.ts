@@ -189,6 +189,7 @@ export async function checkAllSessions(): Promise<
 							() => resolve({ valid: false, reason: "session check timed out" }),
 							SESSION_CHECK_TIMEOUT_MS,
 						),
+					),
 				]);
 				results[id] = await race;
 			} catch (err) {
