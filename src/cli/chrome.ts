@@ -78,6 +78,14 @@ function getUserDataDir(): string {
 	return join(homedir(), ".config/chrome-tfg-debug");
 }
 
+function shouldRunHeadless(): boolean {
+	const configured = process.env.TFG_CHROME_HEADLESS?.trim().toLowerCase();
+	if (configured) return !["0", "false", "no", "off"].includes(configured);
+
+	// Servers normally have no display server. Keep desktop Linux behaviour unchanged.
+	return process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+}
+
 async function waitForCdp(port: number, timeoutMs = 15000): Promise<boolean> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
@@ -116,6 +124,7 @@ export async function startChrome() {
 	}
 
 	const userDataDir = getUserDataDir();
+	const headless = shouldRunHeadless();
 
 	console.log("==========================================");
 	console.log("  Token-Free Gateway — Chrome Debug Mode");
@@ -123,10 +132,12 @@ export async function startChrome() {
 	console.log(`  Chrome  : ${chromePath}`);
 	console.log(`  Profile : ${userDataDir}`);
 	console.log(`  CDP     : http://127.0.0.1:${CDP_PORT}`);
+	console.log(`  Mode    : ${headless ? "headless" : "headed"}`);
 	console.log("");
 
 	const flags = [
 		`--remote-debugging-port=${CDP_PORT}`,
+		"--remote-debugging-address=127.0.0.1",
 		`--user-data-dir=${userDataDir}`,
 		"--no-first-run",
 		"--no-default-browser-check",
@@ -135,7 +146,9 @@ export async function startChrome() {
 		"--disable-translate",
 		"--disable-features=TranslateUI",
 		"--remote-allow-origins=*",
-		...PROVIDER_URLS,
+		...(headless
+			? ["--headless=new", "--disable-gpu", "--disable-dev-shm-usage", "about:blank"]
+			: PROVIDER_URLS),
 	];
 
 	const proc = Bun.spawn({
@@ -156,19 +169,22 @@ export async function startChrome() {
 		process.exit(1);
 	}
 
-	console.log("✓ Chrome is running in debug mode!");
+	console.log(`✓ Chrome is running in ${headless ? "headless " : ""}debug mode!`);
 	console.log("");
-	console.log("==========================================");
-	console.log("  Next steps:");
-	console.log("==========================================");
-	console.log("  1. Log in to each provider in the browser tabs");
-	console.log("     (all provider pages have been opened automatically)");
-	console.log("  2. Run: token-free-gateway webauth");
-	console.log("  3. Run: token-free-gateway start");
-	console.log("");
-	console.log("  To stop Chrome debug mode:");
-	console.log("    token-free-gateway chrome stop");
-	console.log("==========================================");
+
+	if (!headless) {
+		console.log("==========================================");
+		console.log("  Next steps:");
+		console.log("==========================================");
+		console.log("  1. Log in to each provider in the browser tabs");
+		console.log("     (all provider pages have been opened automatically)");
+		console.log("  2. Run: token-free-gateway webauth");
+		console.log("  3. Run: token-free-gateway start");
+		console.log("");
+		console.log("  To stop Chrome debug mode:");
+		console.log("    token-free-gateway chrome stop");
+		console.log("==========================================");
+	}
 }
 
 export async function stopChrome() {
