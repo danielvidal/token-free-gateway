@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 export interface GatewayConfig {
+	host: string;
 	port: number;
 	gatewayApiKey: string | undefined;
 	cdpUrl: string;
@@ -11,6 +12,7 @@ export interface GatewayConfig {
 }
 
 interface ConfigFile {
+	host?: string;
 	port?: number;
 	apiKey?: string;
 	cdpUrl?: string;
@@ -18,6 +20,7 @@ interface ConfigFile {
 }
 
 const DEFAULTS: Required<ConfigFile> = {
+	host: "0.0.0.0",
 	port: 3456,
 	apiKey: "",
 	cdpUrl: "http://127.0.0.1:9222",
@@ -83,6 +86,7 @@ export function ensureConfigFile(): void {
 export function loadConfig(): GatewayConfig {
 	const file = loadConfigFile();
 	return {
+		host: process.env.TFG_HOST ?? file.host ?? DEFAULTS.host,
 		port: Number.parseInt(process.env.TFG_PORT ?? String(file.port ?? DEFAULTS.port), 10),
 		gatewayApiKey: (process.env.TFG_API_KEY ?? file.apiKey ?? DEFAULTS.apiKey) || undefined,
 		cdpUrl: process.env.TFG_CDP_URL ?? file.cdpUrl ?? DEFAULTS.cdpUrl,
