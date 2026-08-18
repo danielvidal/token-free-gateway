@@ -21,39 +21,24 @@ export abstract class BaseDomClient<TAuth = unknown> implements WebProviderClien
 	protected abstract readonly config: DomClientConfig;
 
 	protected page: Page | null = null;
-	protected readonly auth: TAuth;
+	protected readonly auth: TAuth | undefined;
 
-	constructor(auth: TAuth) {
+	constructor(auth?: TAuth) {
 		this.auth = auth;
 	}
 
-	// ── Abstract methods ────────────────────────────────────────────
-
 	protected abstract getCookies(): BrowserCookie[];
-
-	/**
-	 * Perform the full DOM interaction: find the input element, paste the
-	 * message, submit, wait for and return the assistant's reply text.
-	 *
-	 * Use `this.pollForStableText()` for the common poll-until-stable loop.
-	 */
 	protected abstract sendViaDom(page: Page, params: NormalizedSendParams): Promise<string>;
-
 	protected abstract parseStreamImpl(
 		body: ReadableStream<Uint8Array>,
 		onDelta?: (delta: string) => void,
 	): Promise<StreamResult>;
 
-	// ── Optional hooks ──────────────────────────────────────────────
-
 	protected async onInit(): Promise<void> {}
 
-	/** Build the SSE payload from the captured text. Override to customise. */
 	protected formatSsePayload(text: string): string {
 		return `data: ${JSON.stringify({ text })}\n\n`;
 	}
-
-	// ── Public WebProviderClient implementation ─────────────────────
 
 	async init(): Promise<void> {
 		await this.getPage();
@@ -75,7 +60,7 @@ export abstract class BaseDomClient<TAuth = unknown> implements WebProviderClien
 		const text = await this.sendViaDom(page, normalized);
 		if (!text) {
 			throw new Error(
-				`${this.providerId}: no assistant reply detected. Ensure the site is reachable and you are logged in.`,
+				`${this.providerId}: no assistant reply detected. Ensure the site is reachable and guest access is available, or authenticate this provider.`,
 			);
 		}
 		return textToStream(this.formatSsePayload(text));
@@ -96,8 +81,6 @@ export abstract class BaseDomClient<TAuth = unknown> implements WebProviderClien
 		this.page = null;
 	}
 
-	// ── Protected helpers ────────────────────────────────────────────
-
 	protected async getPage(): Promise<Page> {
 		this.page = await ensurePage(this.page, {
 			hostKey: this.config.hostKey,
@@ -107,41 +90,26 @@ export abstract class BaseDomClient<TAuth = unknown> implements WebProviderClien
 		return this.page;
 	}
 
-	/**
-	 * Poll the page until the extracted text stabilises for
-	 * `config.stabilityThreshold` consecutive reads (default 2).
-	 *
-	 * @param extractFn - Called each iteration to pull current response
-	 *   text from the DOM.  Return empty string while no response is
-	 *   visible yet.
-	 */
 	protected async pollForStableText(
-		extractFn: () => Promise<string>,
+		readText: () => Promise<string>,
 		signal?: AbortSignal,
 	): Promise<string> {
-		const interval = this.config.pollIntervalMs ?? 2000;
-		const maxWait = this.config.maxWaitMs ?? 120_000;
-		const threshold = this.config.stabilityThreshold ?? 2;
-
-		let lastText = "";
+		let previous = "";
 		let stableCount = 0;
-
-		for (let elapsed = 0; elapsed < maxWait; elapsed += interval) {
-			if (signal?.aborted) throw new Error(`${this.providerId} request aborted`);
-			await new Promise<void>((r) => setTimeout(r, interval));
-
-			const text = await extractFn();
-			if (text && text.length >= 2) {
-				if (text !== lastText) {
-					lastText = text;
-					stableCount = 0;
-				} else {
-					stableCount++;
-					if (stableCount >= threshold) break;
-				}
+		const deadline = Date.now() + this.config.maxWaitMs;
+		while (Date.now() < deadline) {
+			if (signal?.aborted) throw new Error(`${this.providerId}: request aborted`);
+			const current = (await readText()).trim();
+			if (current && current === previous) {
+				stableCount += 1;
+				if (stableCount >= this.config.stabilityThreshold) return current;
+			} else {
+				previous = current;
+				stableCount = 0;
 			}
+			await new Promise((resolve) => setTimeout(resolve, this.config.pollIntervalMs));
 		}
-
-		return lastText;
+		if (previous) return previous;
+		throw new Error(`${this.providerId}: timed out waiting for assistant response`);
 	}
 }
