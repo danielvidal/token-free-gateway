@@ -5,6 +5,19 @@ import type { DomClientConfig, NormalizedSendParams } from "../factory/types.ts"
 import type { StreamResult } from "../types.ts";
 import { parseChatGPTStream } from "./stream.ts";
 
+const RESPONSE_SELECTORS = [
+	'[data-message-author-role="assistant"]',
+	'[data-testid^="conversation-turn-"]',
+	'article[data-testid^="conversation-turn-"]',
+	'.agent-turn',
+	'[class*="markdown"]',
+	'[class*="prose"]',
+	'div[dir="auto"]',
+	'p',
+	'pre',
+	'code',
+] as const;
+
 export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 	readonly providerId = "chatgpt-web";
 
@@ -17,7 +30,7 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 			{ id: "gpt-4-turbo", name: "GPT-4 Turbo" },
 			{ id: "gpt-3.5-turbo", name: "GPT-3.5 Turbo" },
 		],
-		pollIntervalMs: 1000,
+		pollIntervalMs: 750,
 		maxWaitMs: 90_000,
 		stabilityThreshold: 2,
 	};
@@ -49,18 +62,20 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 			);
 		}
 
-		const baseline = await page.evaluate(() => {
-			const turnSelectors = [
-				'article[data-testid^="conversation-turn-"]',
-				'[data-testid^="conversation-turn-"]',
-				'article',
-			];
-			for (const selector of turnSelectors) {
-				const count = document.querySelectorAll(selector).length;
-				if (count > 0) return { selector, count };
+		const baseline = await page.evaluate((selectors) => {
+			const clean = (text: string) =>
+				text.replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/\s+/g, " ").trim();
+			const texts = new Set<string>();
+			for (const selector of selectors) {
+				for (const element of document.querySelectorAll(selector)) {
+					const el = element as HTMLElement;
+					if (!el.offsetParent) continue;
+					const text = clean(el.innerText ?? el.textContent ?? "");
+					if (text) texts.add(text);
+				}
 			}
-			return { selector: 'article[data-testid^="conversation-turn-"]', count: 0 };
-		});
+			return [...texts];
+		}, [...RESPONSE_SELECTORS]);
 
 		await inputHandle.click();
 		await page.waitForTimeout(250);
@@ -68,9 +83,10 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 		await page.waitForTimeout(250);
 		await page.keyboard.press("Enter");
 		console.log(
-			`[ChatGPT Guest] DOM: pasted message and pressed Enter (baseline turns: ${baseline.count})`,
+			`[ChatGPT Guest] DOM: pasted message and pressed Enter (baseline texts: ${baseline.length})`,
 		);
 
+		const baselineTexts = new Set(baseline);
 		const deadline = Date.now() + this.config.maxWaitMs;
 		let lastText = "";
 		let stableCount = 0;
@@ -80,56 +96,68 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 			await page.waitForTimeout(this.config.pollIntervalMs);
 
 			const result = await page.evaluate(
-				({ baselineSelector, baselineCount, prompt }) => {
+				({ selectors, baseline, prompt }) => {
 					const clean = (text: string) =>
 						text.replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/\s+/g, " ").trim();
-
+					const normalizedPrompt = clean(prompt);
+					const baselineSet = new Set(baseline);
 					const stopButton = document.querySelector(
 						'button[data-testid="stop-button"], button[aria-label*="Stop" i], button[aria-label*="stop" i]',
 					);
 
-					const assistantSelectors = [
-						'[data-message-author-role="assistant"]',
-						'div[data-message-author-role="assistant"]',
-						'.agent-turn [data-message-author-role="assistant"]',
-					];
-					for (const selector of assistantSelectors) {
+					const isNoise = (text: string) => {
+						const lower = text.toLowerCase();
+						return (
+							!text ||
+							text === normalizedPrompt ||
+							baselineSet.has(text) ||
+							lower === "chatgpt" ||
+							lower === "log in" ||
+							lower === "sign up" ||
+							lower === "attach" ||
+							lower === "search" ||
+							lower === "voice" ||
+							lower === "send" ||
+							lower.startsWith("chatgpt can make mistakes")
+						);
+					};
+
+					const candidates: Array<{ text: string; source: string; depth: number }> = [];
+					for (const selector of selectors) {
 						const elements = document.querySelectorAll(selector);
-						if (elements.length === 0) continue;
-						const last = elements[elements.length - 1] as HTMLElement;
-						const text = clean(last.innerText ?? last.textContent ?? "");
-						if (text && text !== clean(prompt)) {
-							return { text, isStreaming: !!stopButton, source: selector };
-						}
-					}
-
-					const turns = document.querySelectorAll(baselineSelector);
-					if (turns.length > baselineCount) {
-						for (let i = turns.length - 1; i >= baselineCount; i--) {
-							const turn = turns[i] as HTMLElement;
-							const text = clean(turn.innerText ?? turn.textContent ?? "");
-							if (text && text !== clean(prompt)) {
-								return { text, isStreaming: !!stopButton, source: baselineSelector };
+						for (let i = 0; i < elements.length; i++) {
+							const el = elements[i] as HTMLElement;
+							if (!el.offsetParent) continue;
+							const text = clean(el.innerText ?? el.textContent ?? "");
+							if (isNoise(text)) continue;
+							let depth = 0;
+							let cursor: Element | null = el;
+							while (cursor?.parentElement) {
+								depth++;
+								cursor = cursor.parentElement;
 							}
+							candidates.push({ text, source: selector, depth });
 						}
 					}
 
-					const genericTurns = document.querySelectorAll(
-						'article[data-testid^="conversation-turn-"], [data-testid^="conversation-turn-"]',
-					);
-					for (let i = genericTurns.length - 1; i >= 0; i--) {
-						const turn = genericTurns[i] as HTMLElement;
-						const text = clean(turn.innerText ?? turn.textContent ?? "");
-						if (text && text !== clean(prompt)) {
-							return { text, isStreaming: !!stopButton, source: "conversation-turn" };
-						}
+					if (candidates.length === 0) {
+						return { text: "", isStreaming: !!stopButton, source: "none", candidateCount: 0 };
 					}
 
-					return { text: "", isStreaming: !!stopButton, source: "none" };
+					// Prefer the deepest/newest DOM text. This avoids returning a large container
+					// that includes both the prompt and the assistant response.
+					candidates.sort((a, b) => a.depth - b.depth);
+					const best = candidates[candidates.length - 1];
+					return {
+						text: best.text,
+						isStreaming: !!stopButton,
+						source: best.source,
+						candidateCount: candidates.length,
+					};
 				},
 				{
-					baselineSelector: baseline.selector,
-					baselineCount: baseline.count,
+					selectors: [...RESPONSE_SELECTORS],
+					baseline,
 					prompt: params.message,
 				},
 			);
@@ -138,7 +166,7 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 				lastText = result.text;
 				stableCount = 0;
 				console.log(
-					`[ChatGPT Guest] captured ${lastText.length} chars via ${result.source}${result.isStreaming ? " (streaming)" : ""}`,
+					`[ChatGPT Guest] captured ${lastText.length} chars via ${result.source} (${result.candidateCount} candidates)${result.isStreaming ? " (streaming)" : ""}`,
 				);
 			} else if (result.text) {
 				stableCount += 1;
