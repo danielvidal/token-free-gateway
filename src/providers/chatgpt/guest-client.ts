@@ -5,19 +5,6 @@ import type { DomClientConfig, NormalizedSendParams } from "../factory/types.ts"
 import type { StreamResult } from "../types.ts";
 import { parseChatGPTStream } from "./stream.ts";
 
-const RESPONSE_SELECTORS = [
-	'[data-message-author-role="assistant"]',
-	'[data-testid^="conversation-turn-"]',
-	'article[data-testid^="conversation-turn-"]',
-	'.agent-turn',
-	'[class*="markdown"]',
-	'[class*="prose"]',
-	'div[dir="auto"]',
-	'p',
-	'pre',
-	'code',
-] as const;
-
 export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 	readonly providerId = "chatgpt-web";
 
@@ -62,20 +49,7 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 			);
 		}
 
-		const baseline = await page.evaluate((selectors) => {
-			const clean = (text: string) =>
-				text.replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/\s+/g, " ").trim();
-			const texts = new Set<string>();
-			for (const selector of selectors) {
-				for (const element of document.querySelectorAll(selector)) {
-					const el = element as HTMLElement;
-					if (!el.offsetParent) continue;
-					const text = clean(el.innerText ?? el.textContent ?? "");
-					if (text) texts.add(text);
-				}
-			}
-			return [...texts];
-		}, [...RESPONSE_SELECTORS]);
+		const baselineBody = await page.evaluate(() => document.body?.innerText ?? "");
 
 		await inputHandle.click();
 		await page.waitForTimeout(250);
@@ -83,10 +57,9 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 		await page.waitForTimeout(250);
 		await page.keyboard.press("Enter");
 		console.log(
-			`[ChatGPT Guest] DOM: pasted message and pressed Enter (baseline texts: ${baseline.length})`,
+			`[ChatGPT Guest] DOM: pasted message and pressed Enter (baseline body: ${baselineBody.length} chars)`,
 		);
 
-		const baselineTexts = new Set(baseline);
 		const deadline = Date.now() + this.config.maxWaitMs;
 		let lastText = "";
 		let stableCount = 0;
@@ -96,77 +69,68 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 			await page.waitForTimeout(this.config.pollIntervalMs);
 
 			const result = await page.evaluate(
-				({ selectors, baseline, prompt }) => {
-					const clean = (text: string) =>
+				({ baseline, prompt }) => {
+					const normalizeLine = (text: string) =>
 						text.replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/\s+/g, " ").trim();
-					const normalizedPrompt = clean(prompt);
-					const baselineSet = new Set(baseline);
 					const stopButton = document.querySelector(
 						'button[data-testid="stop-button"], button[aria-label*="Stop" i], button[aria-label*="stop" i]',
 					);
+					const baselineLines = new Set(
+						baseline
+							.split("\n")
+							.map(normalizeLine)
+							.filter(Boolean),
+					);
+					const promptLine = normalizeLine(prompt);
+					const bodyLines = (document.body?.innerText ?? "")
+						.split("\n")
+						.map(normalizeLine)
+						.filter(Boolean);
 
-					const isNoise = (text: string) => {
-						const lower = text.toLowerCase();
-						return (
-							!text ||
-							text === normalizedPrompt ||
-							baselineSet.has(text) ||
-							lower === "chatgpt" ||
-							lower === "log in" ||
-							lower === "sign up" ||
-							lower === "attach" ||
-							lower === "search" ||
-							lower === "voice" ||
-							lower === "send" ||
-							lower.startsWith("chatgpt can make mistakes")
-						);
-					};
+					const noise = new Set([
+						"ChatGPT",
+						"Log in",
+						"Sign up",
+						"Attach",
+						"Search",
+						"Voice",
+						"Send",
+						"Copy",
+						"Edit",
+						"Good response",
+						"Bad response",
+						"Read aloud",
+						"Regenerate",
+					]);
 
-					const candidates: Array<{ text: string; source: string; depth: number }> = [];
-					for (const selector of selectors) {
-						const elements = document.querySelectorAll(selector);
-						for (let i = 0; i < elements.length; i++) {
-							const el = elements[i] as HTMLElement;
-							if (!el.offsetParent) continue;
-							const text = clean(el.innerText ?? el.textContent ?? "");
-							if (isNoise(text)) continue;
-							let depth = 0;
-							let cursor: Element | null = el;
-							while (cursor?.parentElement) {
-								depth++;
-								cursor = cursor.parentElement;
-							}
-							candidates.push({ text, source: selector, depth });
-						}
+					const newLines = bodyLines.filter((line) => {
+						if (!line || line === promptLine) return false;
+						if (baselineLines.has(line)) return false;
+						if (noise.has(line)) return false;
+						if (/^ChatGPT can make mistakes/i.test(line)) return false;
+						return true;
+					});
+
+					if (newLines.length === 0) {
+						return { text: "", isStreaming: !!stopButton, lineCount: 0 };
 					}
 
-					if (candidates.length === 0) {
-						return { text: "", isStreaming: !!stopButton, source: "none", candidateCount: 0 };
-					}
-
-					// Prefer the deepest/newest DOM text. This avoids returning a large container
-					// that includes both the prompt and the assistant response.
-					candidates.sort((a, b) => a.depth - b.depth);
-					const best = candidates[candidates.length - 1];
+					// The prompt itself is filtered above, so the remaining new body text is
+					// the assistant response plus occasional controls. Preserve line breaks.
 					return {
-						text: best.text,
+						text: newLines.join("\n").trim(),
 						isStreaming: !!stopButton,
-						source: best.source,
-						candidateCount: candidates.length,
+						lineCount: newLines.length,
 					};
 				},
-				{
-					selectors: [...RESPONSE_SELECTORS],
-					baseline,
-					prompt: params.message,
-				},
+				{ baseline: baselineBody, prompt: params.message },
 			);
 
 			if (result.text && result.text !== lastText) {
 				lastText = result.text;
 				stableCount = 0;
 				console.log(
-					`[ChatGPT Guest] captured ${lastText.length} chars via ${result.source} (${result.candidateCount} candidates)${result.isStreaming ? " (streaming)" : ""}`,
+					`[ChatGPT Guest] captured ${lastText.length} chars from body diff (${result.lineCount} lines)${result.isStreaming ? " (streaming)" : ""}`,
 				);
 			} else if (result.text) {
 				stableCount += 1;
@@ -178,7 +142,7 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 
 		if (lastText) return lastText;
 		throw new Error(
-			"ChatGPT guest: response appeared to be generated, but no assistant text could be captured from the DOM.",
+			"ChatGPT guest: response appeared to be generated, but no assistant text could be captured from document.body.innerText.",
 		);
 	}
 
