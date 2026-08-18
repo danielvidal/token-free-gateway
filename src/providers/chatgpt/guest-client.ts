@@ -45,18 +45,37 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 			"textarea",
 			'[contenteditable="true"]',
 		];
-		const maxWaitMs = this.config.maxWaitMs ?? 90_000;
-		const pollIntervalMs = this.config.pollIntervalMs ?? 750;
-		const stabilityThreshold = this.config.stabilityThreshold ?? 2;
 
+		// A fresh headless tab is returned after DOMContentLoaded, but ChatGPT's
+		// client-side app can take a few more seconds to hydrate and render the
+		// guest prompt input. Poll instead of failing on the first DOM read.
 		let inputHandle = null;
-		for (const selector of inputSelectors) {
-			inputHandle = await page.$(selector);
-			if (inputHandle) break;
+		const inputDeadline = Date.now() + 20_000;
+		while (!inputHandle && Date.now() < inputDeadline) {
+			for (const selector of inputSelectors) {
+				inputHandle = await page.$(selector);
+				if (inputHandle) break;
+			}
+			if (!inputHandle) await page.waitForTimeout(500);
 		}
+
 		if (!inputHandle) {
+			const diagnostic = await page
+				.evaluate(() => ({
+					url: location.href,
+					title: document.title,
+					text: (document.body?.innerText ?? "")
+						.replace(/[\u200B-\u200D\uFEFF]/g, "")
+						.replace(/\s+/g, " ")
+						.trim()
+						.slice(0, 600),
+				}))
+				.catch(() => ({ url: page.url(), title: "", text: "" }));
+			console.warn(
+				`[ChatGPT Guest] input not found after 20s; url=${diagnostic.url}; title=${JSON.stringify(diagnostic.title)}; visibleText=${JSON.stringify(diagnostic.text)}`,
+			);
 			throw new Error(
-				"ChatGPT guest: chat input not found. Guest access may be unavailable or the page may require interaction.",
+				"ChatGPT guest: chat input not found after waiting for the page to load. Guest access may be unavailable or the page may require interaction.",
 			);
 		}
 
@@ -67,6 +86,9 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 		await page.keyboard.press("Enter");
 		console.log("[ChatGPT Guest] DOM: pasted message and pressed Enter");
 
+		const maxWaitMs = this.config.maxWaitMs ?? 90_000;
+		const pollIntervalMs = this.config.pollIntervalMs ?? 750;
+		const stabilityThreshold = this.config.stabilityThreshold ?? 2;
 		const deadline = Date.now() + maxWaitMs;
 		let lastText = "";
 		let stableCount = 0;
