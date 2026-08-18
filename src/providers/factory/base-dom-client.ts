@@ -21,9 +21,9 @@ export abstract class BaseDomClient<TAuth = unknown> implements WebProviderClien
 	protected abstract readonly config: DomClientConfig;
 
 	protected page: Page | null = null;
-	protected readonly auth: TAuth | undefined;
+	protected readonly auth: TAuth;
 
-	constructor(auth?: TAuth) {
+	constructor(auth: TAuth) {
 		this.auth = auth;
 	}
 
@@ -75,7 +75,7 @@ export abstract class BaseDomClient<TAuth = unknown> implements WebProviderClien
 		const text = await this.sendViaDom(page, normalized);
 		if (!text) {
 			throw new Error(
-				`${this.providerId}: no assistant reply detected. Ensure the site is reachable and guest access is available, or authenticate this provider.`,
+				`${this.providerId}: no assistant reply detected. Ensure the site is reachable and you are logged in.`,
 			);
 		}
 		return textToStream(this.formatSsePayload(text));
