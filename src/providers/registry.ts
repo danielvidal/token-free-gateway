@@ -62,6 +62,10 @@ async function loadDefinitions(): Promise<ProviderDefinition[]> {
 
 const clientCache = new Map<string, WebProviderClient>();
 
+function requiresCredentials(def: ProviderDefinition): boolean {
+	return (def.authMode ?? "required") === "required";
+}
+
 /**
  * Evict a cached provider client so the next `getProviderClient` call
  * re-reads credentials from disk and creates a fresh instance.
@@ -78,19 +82,21 @@ export function evictProviderClient(providerId: string): void {
 
 /**
  * Get or create a provider client for the given provider ID.
- * Returns null if no credentials are stored for this provider.
+ * Providers default to authMode=required for backwards compatibility.
+ * Optional/anonymous providers may be instantiated without stored credentials.
  */
 export async function getProviderClient(providerId: string): Promise<WebProviderClient | null> {
 	if (clientCache.has(providerId)) return clientCache.get(providerId)!;
-
-	const creds = getCredentials(providerId);
-	if (!creds) return null;
 
 	const defs = await loadDefinitions();
 	const def = defs.find((d) => d.id === providerId);
 	if (!def) return null;
 
-	const client = def.factory(creds);
+	const creds = getCredentials(providerId);
+	if (!creds && requiresCredentials(def)) return null;
+
+	const credentials = def.authMode === "anonymous" ? undefined : creds;
+	const client = def.factory(credentials);
 	await client.init();
 	clientCache.set(providerId, client);
 	return client;
@@ -128,14 +134,15 @@ export async function getClientForModel(model: string): Promise<WebProviderClien
 }
 
 /**
- * List all models from all authenticated providers.
+ * List models from providers that are currently usable.
+ * Required-auth providers need stored credentials; optional/anonymous providers do not.
  */
 export async function listAllModels(): Promise<ModelInfo[]> {
 	const defs = await loadDefinitions();
 	const models: ModelInfo[] = [];
 	for (const def of defs) {
 		const creds = getCredentials(def.id);
-		if (!creds) continue;
+		if (!creds && requiresCredentials(def)) continue;
 		models.push(...def.models);
 	}
 	return models;
@@ -182,7 +189,6 @@ export async function checkAllSessions(): Promise<
 							() => resolve({ valid: false, reason: "session check timed out" }),
 							SESSION_CHECK_TIMEOUT_MS,
 						),
-					),
 				]);
 				results[id] = await race;
 			} catch (err) {
