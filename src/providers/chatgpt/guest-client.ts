@@ -5,6 +5,14 @@ import type { DomClientConfig, NormalizedSendParams } from "../factory/types.ts"
 import type { StreamResult } from "../types.ts";
 import { parseChatGPTStream } from "./stream.ts";
 
+function cleanGuestResponseText(text: string): string {
+	return text
+		.replace(/^\s*ChatGPT\s+said\s*:\s*/i, "")
+		.replace(/^\s*Assistant\s*:\s*/i, "")
+		.replace(/^\s*Human\s*:\s*/i, "")
+		.trim();
+}
+
 export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 	readonly providerId = "chatgpt-web";
 
@@ -114,8 +122,6 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 					return text === promptText || text === humanPromptText;
 				});
 
-				// Prefer the smallest matching element so we anchor on the prompt bubble,
-				// not on a large conversation container that happens to include it.
 				promptMatches.sort((a, b) => a.querySelectorAll("*").length - b.querySelectorAll("*").length);
 				const promptEl = promptMatches[0];
 
@@ -127,7 +133,6 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 						if (el.closest("header, nav, form, button, [role='dialog']")) return false;
 						const text = clean(el.innerText ?? el.textContent ?? "");
 						if (isNoise(text)) return false;
-						// Leaf-ish elements are much less likely to be a page-level banner/container.
 						const visibleChildren = Array.from(el.children).filter((child) =>
 							isVisible(child as HTMLElement),
 						).length;
@@ -143,7 +148,6 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 							if (!text || isNoise(text)) break;
 							if (text.includes(promptText) || text.includes(humanPromptText)) break;
 							if (cursor.matches("header, nav, form, [role='dialog']")) break;
-							// Keep climbing while the container still looks like one assistant turn.
 							if (text.length > 20_000) break;
 							best = cursor;
 							cursor = cursor.parentElement;
@@ -160,8 +164,6 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 					}
 				}
 
-				// Fallback: the guest UI renders a Copy action under each assistant turn.
-				// Walk up from the last Copy button until we find a non-trivial text container.
 				const copyButtons = Array.from(
 					document.querySelectorAll<HTMLElement>(
 						'button[aria-label*="Copy" i], button[title*="Copy" i], [data-testid*="copy" i]',
@@ -186,16 +188,17 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 				return { text: "", isStreaming: !!stopButton, source: "none" };
 			}, params.message);
 
-			if (result.text && result.text !== lastText) {
-				lastText = result.text;
+			const cleanedText = cleanGuestResponseText(result.text);
+			if (cleanedText && cleanedText !== lastText) {
+				lastText = cleanedText;
 				stableCount = 0;
 				console.log(
 					`[ChatGPT Guest] captured ${lastText.length} chars via ${result.source}${result.isStreaming ? " (streaming)" : ""}`,
 				);
-			} else if (result.text) {
+			} else if (cleanedText) {
 				stableCount += 1;
 				if (!result.isStreaming && stableCount >= this.config.stabilityThreshold) {
-					return result.text;
+					return cleanedText;
 				}
 			}
 		}
