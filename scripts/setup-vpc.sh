@@ -38,7 +38,7 @@ apt_install() {
   log "installing OS dependencies"
   $SUDO apt-get update -y
   $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    ca-certificates curl git lsof procps
+    ca-certificates curl git lsof procps xvfb xauth
 }
 
 install_native_chrome() {
@@ -54,7 +54,7 @@ install_native_chrome() {
 
   case "$arch" in
     amd64|x86_64)
-      log "installing native Google Chrome .deb (avoids Chromium Snap/systemd cgroup issues)"
+      log "installing native Google Chrome .deb"
       local deb
       deb="$(mktemp --suffix=.deb)"
       trap 'rm -f "${deb:-}"' RETURN
@@ -66,14 +66,12 @@ install_native_chrome() {
       trap - RETURN
       ;;
     *)
-      die "native Google Chrome installer currently supports amd64 only (detected: $arch). Refusing Chromium Snap for a system service; set up a native Chrome/Chromium binary and rerun."
+      die "native Google Chrome installer currently supports amd64 only (detected: $arch). Set up a native Chrome/Chromium binary and rerun."
       ;;
   esac
 }
 
 find_chrome() {
-  # Intentionally do not use /usr/bin/chromium or chromium-browser here on Ubuntu:
-  # those paths are commonly Snap launchers and are unreliable from a system service.
   local candidates=(
     /usr/bin/google-chrome-stable
     /usr/bin/google-chrome
@@ -141,13 +139,15 @@ write_services() {
   local chrome_bin="$1"
   local chrome_profile="$APP_HOME/.config/chrome-tfg-debug"
 
+  command -v xvfb-run >/dev/null 2>&1 || die "xvfb-run not found after installing xvfb"
+
   log "writing systemd services"
   $SUDO install -d -o "$APP_USER" -g "$APP_USER" -m 0700 "$chrome_profile"
   $SUDO install -d -o "$APP_USER" -g "$APP_USER" -m 0700 "$APP_HOME/.token-free-gateway"
 
   $SUDO tee "/etc/systemd/system/$CHROME_SERVICE" >/dev/null <<EOF
 [Unit]
-Description=Token-Free Gateway Headless Chrome
+Description=Token-Free Gateway Chrome on virtual X display
 After=network-online.target
 Wants=network-online.target
 
@@ -156,7 +156,7 @@ Type=simple
 User=$APP_USER
 Group=$APP_USER
 Environment=HOME=$APP_HOME
-ExecStart=$chrome_bin --headless=new --remote-debugging-address=127.0.0.1 --remote-debugging-port=$CDP_PORT --user-data-dir=$chrome_profile --no-first-run --no-default-browser-check --disable-background-networking --disable-sync --disable-translate --disable-features=TranslateUI --disable-dev-shm-usage --remote-allow-origins=* about:blank
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x960x24 -nolisten tcp" $chrome_bin --remote-debugging-address=127.0.0.1 --remote-debugging-port=$CDP_PORT --user-data-dir=$chrome_profile --window-size=1280,960 --no-first-run --no-default-browser-check --disable-background-networking --disable-sync --disable-translate --disable-features=TranslateUI --disable-dev-shm-usage --remote-allow-origins=* about:blank
 Restart=always
 RestartSec=2
 TimeoutStopSec=10
@@ -211,9 +211,9 @@ start_and_verify() {
   done
   if [[ $ready -ne 1 ]]; then
     $SUDO systemctl --no-pager --full status "$CHROME_SERVICE" || true
-    printf '\n[setup-vpc] recent Chrome logs:\n' >&2
+    printf '\n[setup-vpc] recent Chrome/Xvfb logs:\n' >&2
     $SUDO journalctl -u "$CHROME_SERVICE" -n 80 --no-pager || true
-    die "headless Chrome did not become ready on 127.0.0.1:$CDP_PORT"
+    die "Chrome on Xvfb did not become ready on 127.0.0.1:$CDP_PORT"
   fi
 
   $SUDO systemctl restart "$GATEWAY_SERVICE"
@@ -251,7 +251,7 @@ main() {
 
   local chrome_bin
   chrome_bin="$(find_chrome)" || die "native Google Chrome executable not found after installation"
-  log "using browser: $chrome_bin"
+  log "using browser: $chrome_bin (Xvfb, non-headless)"
 
   write_services "$chrome_bin"
   start_and_verify
@@ -259,7 +259,7 @@ main() {
   log "installation complete"
   log "gateway: http://127.0.0.1:$GATEWAY_PORT/v1"
   log "logs: sudo journalctl -u $GATEWAY_SERVICE -f"
-  log "chrome logs: sudo journalctl -u $CHROME_SERVICE -f"
+  log "chrome/xvfb logs: sudo journalctl -u $CHROME_SERVICE -f"
   log "stop everything: bash $SRC_DIR/scripts/stop-vpc.sh"
 }
 
