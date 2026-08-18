@@ -22,9 +22,9 @@ export abstract class BaseApiClient<TAuth = unknown> implements WebProviderClien
 	protected abstract readonly config: ApiClientConfig;
 
 	protected page: Page | null = null;
-	protected readonly auth: TAuth;
+	protected readonly auth: TAuth | undefined;
 
-	constructor(auth: TAuth) {
+	constructor(auth?: TAuth) {
 		this.auth = auth;
 	}
 
@@ -88,8 +88,6 @@ export abstract class BaseApiClient<TAuth = unknown> implements WebProviderClien
 			if (!result.ok) {
 				throwIfSessionExpired(this.providerId, result.status);
 				const msg = `${this.providerId} API error: ${result.status} - ${result.error}`;
-				// Propagate provider 4xx as ProviderApiError so callers can
-				// return the same status to the client (avoid pointless retries).
 				if (result.status && result.status >= 400 && result.status < 500) {
 					throw new ProviderApiError(result.status, msg);
 				}
@@ -118,13 +116,6 @@ export abstract class BaseApiClient<TAuth = unknown> implements WebProviderClien
 		this.page = null;
 	}
 
-	// ── Protected helpers ────────────────────────────────────────────
-
-	/**
-	 * Return a live browser page, creating one via `BrowserManager` if
-	 * necessary.  Subclasses may override for custom page bootstrapping
-	 * (e.g. ChatGPT's oaistatic wait).
-	 */
 	protected async getPage(): Promise<Page> {
 		this.page = await ensurePage(this.page, {
 			hostKey: this.config.hostKey,
