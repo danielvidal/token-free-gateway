@@ -8,7 +8,7 @@ import type { StreamResult } from "../types.ts";
 import type { QwenWebAuth } from "./auth.ts";
 import { parseQwenStream } from "./stream.ts";
 
-export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
+export class QwenWebClient extends BaseApiClient<QwenWebAuth | undefined> {
 	readonly providerId = "qwen-web";
 
 	protected readonly config: ApiClientConfig = {
@@ -25,6 +25,7 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 	private readonly baseUrl = "https://chat.qwen.ai";
 
 	protected getCookies() {
+		if (!this.auth) return [];
 		return parseCookieHeader(
 			this.auth.cookie || `qwen_session=${this.auth.sessionToken}`,
 			this.config.cookieDomain,
@@ -44,6 +45,7 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({}),
+						credentials: "include",
 						signal: controller.signal,
 					});
 					clearTimeout(timer);
@@ -116,6 +118,7 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 						method: "POST",
 						headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
 						body: JSON.stringify(requestBody),
+						credentials: "include",
 						signal: controller.signal,
 					});
 					clearTimeout(timer);

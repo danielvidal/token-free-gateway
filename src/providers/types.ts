@@ -53,7 +53,9 @@ export interface WebProviderClient {
 	checkSession?(): Promise<{ valid: boolean; reason?: string }>;
 }
 
-export type WebProviderFactory = (credentials: unknown) => WebProviderClient;
+export type ProviderAuthMode = "required" | "optional" | "anonymous";
+
+export type WebProviderFactory = (credentials?: unknown) => WebProviderClient;
 
 /**
  * Race a promise against a timeout. Rejects with a descriptive error on expiry.
@@ -71,6 +73,13 @@ export interface ProviderDefinition {
 	id: string;
 	name: string;
 	models: ModelInfo[];
+	/**
+	 * Authentication policy for this provider.
+	 * - required (default): stored webauth credentials are mandatory.
+	 * - optional: use stored credentials when present, otherwise run as a guest session.
+	 * - anonymous: always run without stored user credentials.
+	 */
+	authMode?: ProviderAuthMode;
 	factory: WebProviderFactory;
 	loginFn: (params: {
 		onProgress: (msg: string) => void;
