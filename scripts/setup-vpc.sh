@@ -37,14 +37,44 @@ apt_install() {
   command -v apt-get >/dev/null 2>&1 || die "this installer currently supports Debian/Ubuntu (apt-get)"
   log "installing OS dependencies"
   $SUDO apt-get update -y
-  $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    ca-certificates curl git lsof procps chromium
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    ca-certificates curl git lsof procps
+}
+
+install_native_chrome() {
+  local arch
+  arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+
+  if command -v google-chrome-stable >/dev/null 2>&1 || [[ -x /opt/google/chrome/google-chrome ]]; then
+    log "native Google Chrome already installed"
+    $SUDO apt-get update -y >/dev/null 2>&1 || true
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade google-chrome-stable >/dev/null 2>&1 || true
+    return
+  fi
+
+  case "$arch" in
+    amd64|x86_64)
+      log "installing native Google Chrome .deb (avoids Chromium Snap/systemd cgroup issues)"
+      local deb
+      deb="$(mktemp --suffix=.deb)"
+      trap 'rm -f "${deb:-}"' RETURN
+      curl -fsSL \
+        https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+        -o "$deb"
+      $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb"
+      rm -f "$deb"
+      trap - RETURN
+      ;;
+    *)
+      die "native Google Chrome installer currently supports amd64 only (detected: $arch). Refusing Chromium Snap for a system service; set up a native Chrome/Chromium binary and rerun."
+      ;;
+  esac
 }
 
 find_chrome() {
+  # Intentionally do not use /usr/bin/chromium or chromium-browser here on Ubuntu:
+  # those paths are commonly Snap launchers and are unreliable from a system service.
   local candidates=(
-    /usr/bin/chromium
-    /usr/bin/chromium-browser
     /usr/bin/google-chrome-stable
     /usr/bin/google-chrome
     /opt/google/chrome/google-chrome
@@ -94,7 +124,7 @@ cleanup_existing() {
   else
     $SUDO systemctl stop "$GATEWAY_SERVICE" "$CHROME_SERVICE" 2>/dev/null || true
     pkill -TERM -f 'token-free-gateway' 2>/dev/null || true
-    pkill -TERM -f 'remote-debugging-port=9222' 2>/dev/null || true
+    pkill -TERM -f "remote-debugging-port=$CDP_PORT" 2>/dev/null || true
   fi
 }
 
@@ -181,6 +211,8 @@ start_and_verify() {
   done
   if [[ $ready -ne 1 ]]; then
     $SUDO systemctl --no-pager --full status "$CHROME_SERVICE" || true
+    printf '\n[setup-vpc] recent Chrome logs:\n' >&2
+    $SUDO journalctl -u "$CHROME_SERVICE" -n 80 --no-pager || true
     die "headless Chrome did not become ready on 127.0.0.1:$CDP_PORT"
   fi
 
@@ -196,6 +228,8 @@ start_and_verify() {
   done
   if [[ $ready -ne 1 ]]; then
     $SUDO systemctl --no-pager --full status "$GATEWAY_SERVICE" || true
+    printf '\n[setup-vpc] recent gateway logs:\n' >&2
+    $SUDO journalctl -u "$GATEWAY_SERVICE" -n 80 --no-pager || true
     die "gateway did not become ready on 127.0.0.1:$GATEWAY_PORT"
   fi
 
@@ -209,13 +243,14 @@ start_and_verify() {
 
 main() {
   apt_install
+  install_native_chrome
   install_bun
   sync_repo
   cleanup_existing
   build_gateway
 
   local chrome_bin
-  chrome_bin="$(find_chrome)" || die "Chrome/Chromium executable not found after installation"
+  chrome_bin="$(find_chrome)" || die "native Google Chrome executable not found after installation"
   log "using browser: $chrome_bin"
 
   write_services "$chrome_bin"
