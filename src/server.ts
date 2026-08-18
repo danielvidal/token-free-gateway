@@ -38,7 +38,6 @@ async function handleRequest(req: Request): Promise<Response> {
 		return new Response(null, { status: 204, headers: CORS_HEADERS });
 	}
 
-	// Health check is public — no auth required (load balancers, monitoring)
 	if (pathname === "/health" || pathname === "/healthz") {
 		return withCors(await handleHealthRoute());
 	}
@@ -71,8 +70,6 @@ async function handleRequest(req: Request): Promise<Response> {
 		),
 	);
 }
-
-// ── Route handlers ───────────────────────────────────────────
 
 async function handleHealthRoute(): Promise<Response> {
 	const authorized = listAuthorizedProviders();
@@ -147,18 +144,15 @@ async function handleModelByIdRoute(modelId: string): Promise<Response> {
 	});
 }
 
-// ── Server bootstrap ─────────────────────────────────────────
-
 const server = Bun.serve({
+	hostname: config.host,
 	port: config.port,
 	fetch: handleRequest,
-	// Disable Bun's built-in idle timeout (default 10s).
-	// Route-level timeouts are managed by handleChatCompletions via Promise.race.
 	idleTimeout: 0,
 });
 
 const authorized = listAuthorizedProviders();
-console.log(`Token-Free Gateway listening on http://localhost:${server.port}`);
+console.log(`Token-Free Gateway listening on http://${config.host}:${server.port}`);
 console.log(`Auth: ${config.gatewayApiKey ? "enabled (Bearer token)" : "disabled"}`);
 console.log(`Request timeout: ${config.requestTimeoutSec}s`);
 console.log(
