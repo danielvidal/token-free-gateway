@@ -45,6 +45,9 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 			"textarea",
 			'[contenteditable="true"]',
 		];
+		const maxWaitMs = this.config.maxWaitMs ?? 90_000;
+		const pollIntervalMs = this.config.pollIntervalMs ?? 750;
+		const stabilityThreshold = this.config.stabilityThreshold ?? 2;
 
 		let inputHandle = null;
 		for (const selector of inputSelectors) {
@@ -64,13 +67,13 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 		await page.keyboard.press("Enter");
 		console.log("[ChatGPT Guest] DOM: pasted message and pressed Enter");
 
-		const deadline = Date.now() + this.config.maxWaitMs;
+		const deadline = Date.now() + maxWaitMs;
 		let lastText = "";
 		let stableCount = 0;
 
 		while (Date.now() < deadline) {
 			if (params.signal?.aborted) throw new Error("ChatGPT guest request aborted");
-			await page.waitForTimeout(this.config.pollIntervalMs);
+			await page.waitForTimeout(pollIntervalMs);
 
 			const result = await page.evaluate((prompt) => {
 				const clean = (text: string) =>
@@ -197,7 +200,7 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 				);
 			} else if (cleanedText) {
 				stableCount += 1;
-				if (!result.isStreaming && stableCount >= this.config.stabilityThreshold) {
+				if (!result.isStreaming && stableCount >= stabilityThreshold) {
 					return cleanedText;
 				}
 			}
