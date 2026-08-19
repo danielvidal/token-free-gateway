@@ -336,6 +336,21 @@ bun run bump:major  # Bump major version (X.0.0) and sync all package.json files
 | Request hangs / 504 timeout         | Increase `requestTimeoutSec` or check upstream session health               |
 | `/health` returns `session_expired` | Provider session expired — run `token-free-gateway webauth` to re-authorize |
 
+### Model not permitted (HTTP 403)
+
+The gateway answers `403` with a clean `Model not permitted: ...` message (instead
+of leaking internal DOM/API errors) when a model is known but cannot be served:
+
+- the provider requires authentication and no credentials are stored
+  (e.g. `claude-web`, `deepseek-web` before `webauth`);
+- the provider's guest/anonymous session is blocked by the site
+  (e.g. ChatGPT redirects to login, Grok needs an open chat, Perplexity
+  hides the chat input).
+
+Guest-capable providers (e.g. Gemini, and ChatGPT when the site allows
+guest sessions) keep working without any credentials. Authenticate with
+`token-free-gateway webauth` to unlock the login-required providers.
+
 ---
 
 ## Acknowledgments

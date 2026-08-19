@@ -3,6 +3,8 @@ import { BrowserManager } from "./browser/manager.ts";
 import { loadConfig } from "./config.ts";
 import { handleChatCompletions, setRouteTimeoutSec } from "./openai/chat-completions.ts";
 import { listAuthorizedProviders } from "./providers/auth-store.ts";
+import type { WebProviderClient } from "./providers/types.ts";
+import { ModelNotPermittedError } from "./providers/types.ts";
 import {
 	checkAllSessions,
 	getClientForModel,
@@ -97,16 +99,32 @@ async function handleChatCompletionsRoute(req: Request): Promise<Response> {
 		);
 	}
 
-	const provider = await getClientForModel(body.model || "");
+	let provider: WebProviderClient | null;
+	try {
+		provider = await getClientForModel(body.model || "");
+	} catch (err) {
+		if (err instanceof ModelNotPermittedError) {
+			return Response.json(
+				{
+					error: {
+						message: err.message,
+						type: "invalid_request_error",
+					},
+				},
+				{ status: 403 },
+			);
+		}
+		throw err;
+	}
 	if (!provider) {
 		return Response.json(
 			{
 				error: {
-					message: `No authorized provider found for model "${body.model || ""}". Run 'token-free-gateway webauth' to authorize providers.`,
+					message: `Model "${body.model || ""}" is not permitted: no provider serves this model.`,
 					type: "invalid_request_error",
 				},
 			},
-			{ status: 404 },
+			{ status: 403 },
 		);
 	}
 

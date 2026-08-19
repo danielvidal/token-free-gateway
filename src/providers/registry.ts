@@ -5,6 +5,7 @@
 
 import { getCredentials } from "./auth-store.ts";
 import type { ModelInfo, ProviderDefinition, WebProviderClient } from "./types.ts";
+import { ModelNotPermittedError } from "./types.ts";
 
 // Lazy-loaded provider definitions to avoid importing all providers at startup
 let _definitions: ProviderDefinition[] | null = null;
@@ -84,6 +85,9 @@ export function evictProviderClient(providerId: string): void {
  * Get or create a provider client for the given provider ID.
  * Providers default to authMode=required for backwards compatibility.
  * Optional/anonymous providers may be instantiated without stored credentials.
+ *
+ * Throws ModelNotPermittedError when the provider requires credentials and
+ * none are stored, so the HTTP layer can answer 403 with a clean message.
  */
 export async function getProviderClient(providerId: string): Promise<WebProviderClient | null> {
 	if (clientCache.has(providerId)) return clientCache.get(providerId)!;
@@ -93,7 +97,13 @@ export async function getProviderClient(providerId: string): Promise<WebProvider
 	if (!def) return null;
 
 	const creds = getCredentials(providerId);
-	if (!creds && requiresCredentials(def)) return null;
+	if (!creds && requiresCredentials(def)) {
+		throw new ModelNotPermittedError(
+			providerId,
+			def.models[0]?.id,
+			`Model not permitted: provider "${def.name}" requires authentication. Run 'token-free-gateway webauth' to authorize, or use a guest-capable provider.`,
+		);
+	}
 
 	const credentials = def.authMode === "anonymous" ? undefined : creds;
 	const client = def.factory(credentials);

@@ -14,8 +14,6 @@ export const definition: ProviderDefinition = {
 		{ id: "gpt-3.5-turbo", name: "GPT-3.5 Turbo" },
 	],
 	factory: (credentials) =>
-		credentials
-			? new ChatGPTWebClient(credentials as ChatGPTWebAuth)
-			: new ChatGPTGuestClient(),
+		credentials ? new ChatGPTWebClient(credentials as ChatGPTWebAuth) : new ChatGPTGuestClient(),
 	loginFn: loginChatGPTWeb,
 };

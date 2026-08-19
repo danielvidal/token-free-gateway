@@ -1,6 +1,10 @@
 import { evictProviderClient } from "../providers/registry.ts";
 import type { WebProviderClient } from "../providers/types.ts";
-import { ProviderApiError, SessionExpiredError } from "../providers/types.ts";
+import {
+	ModelNotPermittedError,
+	ProviderApiError,
+	SessionExpiredError,
+} from "../providers/types.ts";
 import { buildPromptFromMessages, parseToolResponse } from "../tool-calling/converter.ts";
 import { makeChunk, sseDone, sseEvent, sseHeaders } from "./sse.ts";
 import type {
@@ -245,6 +249,12 @@ function jsonError(message: string, status: number): Response {
  * - anything else       → 502
  */
 function providerErrorResponse(err: unknown, context: string): Response {
+	if (err instanceof ModelNotPermittedError) {
+		console.error(
+			`[chat-completions] ${context}: model not permitted for "${err.providerId}": ${err.message}`,
+		);
+		return jsonError(err.message, 403);
+	}
 	if (err instanceof SessionExpiredError) {
 		evictProviderClient(err.providerId);
 		console.error(

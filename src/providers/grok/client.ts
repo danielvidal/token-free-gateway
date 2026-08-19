@@ -7,7 +7,7 @@ import type { EvalResult } from "../shared/eval-helpers.ts";
 import { withEvalTimeout } from "../shared/eval-helpers.ts";
 import { textToStream } from "../shared/stream-helpers.ts";
 import type { StreamResult } from "../types.ts";
-import { SessionExpiredError } from "../types.ts";
+import { ModelNotPermittedError, SessionExpiredError } from "../types.ts";
 import type { GrokWebAuth } from "./auth.ts";
 import { parseGrokStream } from "./stream.ts";
 
@@ -101,10 +101,15 @@ export class GrokWebClient extends BaseApiClient<GrokWebAuth> {
 						convId = createData?.conversationId ?? createData?.id ?? undefined;
 					}
 				}
-				if (!convId)
-					throw new Error(
-						`Need a Grok conversation. Open or start a chat on grok.com (current URL: ${window.location.href}).`,
-					);
+				if (!convId) {
+					// Sentinel object (serializable across the CDP boundary);
+					// the caller converts it into ModelNotPermittedError.
+					return {
+						__tfgBlocked: true,
+						provider: "grok-web",
+						message: `Grok guest access requires an open chat on grok.com (current URL: ${window.location.href}). Authenticate with 'token-free-gateway webauth' to use Grok.`,
+					};
+				}
 
 				const body: Record<string, unknown> = {
 					message,
@@ -191,6 +196,20 @@ export class GrokWebClient extends BaseApiClient<GrokWebAuth> {
 		});
 
 		if (result instanceof ReadableStream) return result;
+
+		// Sentinel from inside page.evaluate → clean ModelNotPermittedError.
+		const sentinel = result as {
+			__tfgBlocked?: boolean;
+			provider?: string;
+			message?: string;
+		};
+		if (sentinel.__tfgBlocked) {
+			throw new ModelNotPermittedError(
+				sentinel.provider ?? this.providerId,
+				params.model,
+				`Model not permitted: ${sentinel.message ?? "guest access unavailable"}`,
+			);
+		}
 
 		const apiResult = result as { chunks: number[][]; conversationId?: string };
 		this.lastConversationId = apiResult.conversationId;

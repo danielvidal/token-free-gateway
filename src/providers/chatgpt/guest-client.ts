@@ -3,7 +3,16 @@ import { pasteText } from "../../browser/dom-input.ts";
 import { BaseDomClient } from "../factory/base-dom-client.ts";
 import type { DomClientConfig, NormalizedSendParams } from "../factory/types.ts";
 import type { StreamResult } from "../types.ts";
+import { ModelNotPermittedError } from "../types.ts";
 import { parseChatGPTStream } from "./stream.ts";
+
+function guestBlocked(message: string): never {
+	throw new ModelNotPermittedError(
+		"chatgpt-web",
+		"gpt-4",
+		`Model not permitted: ChatGPT guest access is blocked (${message}). Authenticate with 'token-free-gateway webauth' to use ChatGPT.`,
+	);
+}
 
 function cleanGuestResponseText(text: string): string {
 	return text
@@ -54,9 +63,7 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 				console.warn(
 					`[ChatGPT Guest] browser challenge detected; url=${page.url()}; title=${JSON.stringify(title)}`,
 				);
-				throw new Error(
-					"ChatGPT guest unavailable: browser challenge detected. Manual interaction may be required.",
-				);
+				guestBlocked("browser challenge detected");
 			}
 
 			for (const selector of inputSelectors) {
@@ -81,8 +88,13 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 			console.warn(
 				`[ChatGPT Guest] input not found after 20s; url=${diagnostic.url}; title=${JSON.stringify(diagnostic.title)}; visibleText=${JSON.stringify(diagnostic.text)}`,
 			);
-			throw new Error(
-				"ChatGPT guest: chat input not found after waiting for the page to load. Guest access may be unavailable or the page may require interaction.",
+			// The site redirected to a login page (auth.openai.com) or the guest
+			// session is not allowed from this IP/browser — answer cleanly instead
+			// of leaking internal DOM diagnostics.
+			guestBlocked(
+				diagnostic.url.includes("auth.openai.com")
+					? "login required for this session"
+					: "chat input not found; guest access unavailable",
 			);
 		}
 
@@ -108,7 +120,10 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 
 			const result = await page.evaluate((prompt) => {
 				const clean = (text: string) =>
-					text.replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/\s+/g, " ").trim();
+					text
+						.replace(/[\u200B-\u200D\uFEFF]/g, "")
+						.replace(/\s+/g, " ")
+						.trim();
 				const promptText = clean(prompt);
 				const humanPromptText = clean(`Human: ${prompt}`);
 				const root = document.querySelector("main") ?? document.body;
@@ -162,7 +177,9 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 					return text === promptText || text === humanPromptText;
 				});
 
-				promptMatches.sort((a, b) => a.querySelectorAll("*").length - b.querySelectorAll("*").length);
+				promptMatches.sort(
+					(a, b) => a.querySelectorAll("*").length - b.querySelectorAll("*").length,
+				);
 				const promptEl = promptMatches[0];
 
 				if (promptEl) {
@@ -229,10 +246,7 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 				// of the submitted prompt in body.innerText and consider only text after it.
 				// This avoids the earlier bug where a global promotional banner won the
 				// body-diff race.
-				const bodyLines = (document.body?.innerText ?? "")
-					.split("\n")
-					.map(clean)
-					.filter(Boolean);
+				const bodyLines = (document.body?.innerText ?? "").split("\n").map(clean).filter(Boolean);
 				let promptIndex = -1;
 				for (let i = bodyLines.length - 1; i >= 0; i--) {
 					const line = bodyLines[i]!;
@@ -286,7 +300,13 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 							tail: body.slice(-500),
 						};
 					}, params.message)
-					.catch(() => ({ url: page.url(), title: "", promptVisible: false, stopVisible: false, tail: "" }));
+					.catch(() => ({
+						url: page.url(),
+						title: "",
+						promptVisible: false,
+						stopVisible: false,
+						tail: "",
+					}));
 				console.warn(
 					`[ChatGPT Guest] capture diagnostic after 5s; url=${diagnostic.url}; title=${JSON.stringify(diagnostic.title)}; promptVisible=${diagnostic.promptVisible}; stopVisible=${diagnostic.stopVisible}; tail=${JSON.stringify(diagnostic.tail)}`,
 				);
@@ -294,9 +314,7 @@ export class ChatGPTGuestClient extends BaseDomClient<Record<string, never>> {
 		}
 
 		if (lastText) return lastText;
-		throw new Error(
-			"ChatGPT guest: assistant replied in the browser, but the response block could not be extracted.",
-		);
+		guestBlocked("assistant response could not be extracted; guest access unavailable");
 	}
 
 	protected override formatSsePayload(text: string): string {

@@ -4,6 +4,7 @@ import { BaseDomClient } from "../factory/base-dom-client.ts";
 import type { DomClientConfig, NormalizedSendParams } from "../factory/types.ts";
 import { parseCookieHeader } from "../shared/cookie-parser.ts";
 import type { StreamResult } from "../types.ts";
+import { ModelNotPermittedError } from "../types.ts";
 import type { PerplexityWebAuth } from "./auth.ts";
 import { parsePerplexityStream } from "./stream.ts";
 
@@ -43,7 +44,12 @@ export class PerplexityWebClient extends BaseDomClient<PerplexityWebAuth> {
 
 		const inputSel = 'div[contenteditable="true"], [role="textbox"], textarea';
 		const inputHandle = await page.$(inputSel);
-		if (!inputHandle) throw new Error("Perplexity DOM: input not found");
+		if (!inputHandle)
+			throw new ModelNotPermittedError(
+				"perplexity-web",
+				params.model,
+				`Model not permitted: Perplexity guest access is unavailable (chat input not found). Authenticate with 'token-free-gateway webauth' to use Perplexity.`,
+			);
 		await inputHandle.click();
 		await delay(300);
 		await page.keyboard.press("Meta+a");

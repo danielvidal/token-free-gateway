@@ -35,6 +35,26 @@ export class ProviderApiError extends Error {
 	}
 }
 
+/**
+ * Raised when a model is known but cannot be served without credentials
+ * (provider requires login and no guest path exists, or the guest session
+ * was blocked). The gateway maps this to HTTP 403 with a clean
+ * "model not permitted" message instead of leaking internal errors.
+ */
+export class ModelNotPermittedError extends Error {
+	constructor(
+		public readonly providerId: string,
+		model?: string,
+		message?: string,
+	) {
+		super(
+			message ??
+				`Model "${model ?? "this model"}" is not permitted for provider "${providerId}" without authentication.`,
+		);
+		this.name = "ModelNotPermittedError";
+	}
+}
+
 export interface WebProviderClient {
 	readonly providerId: string;
 	init(): Promise<void>;
